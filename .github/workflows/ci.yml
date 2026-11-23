@@ -1,0 +1,13 @@
+name: ci
+on: [push, pull_request]
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.11"}
+      - run: pip install -r requirements.txt pytest httpx moto boto3 kfp azure-ai-ml pyyaml mlflow-skinny
+      - run: python src/gen_data.py artifacts/orders.parquet && python src/validate.py artifacts/orders.parquet
+      - run: cd src && python train.py ../artifacts/orders.parquet ../artifacts/model_v1
+      - run: python -m pytest -q tests

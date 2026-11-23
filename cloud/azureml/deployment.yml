@@ -1,0 +1,16 @@
+$schema: https://azuremlschemas.azureedge.net/latest/managedOnlineDeployment.schema.json
+name: blue
+endpoint_name: ecomm-demand-endpoint
+model:
+  path: ../../artifacts/model_v1
+environment:
+  image: ecomm.azurecr.io/ecomm-demand:1.0
+  inference_config:
+    liveness_route: {port: 8080, path: /health}
+    readiness_route: {port: 8080, path: /health}
+    scoring_route: {port: 8080, path: /predict}
+instance_type: Standard_DS3_v2
+instance_count: 2
+request_settings:
+  request_timeout_ms: 3000
+  max_concurrent_requests_per_instance: 16

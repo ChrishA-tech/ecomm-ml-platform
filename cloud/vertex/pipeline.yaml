@@ -1,0 +1,343 @@
+# PIPELINE DEFINITION
+# Name: ecomm-demand-forecast
+# Description: Validate, train, gate and register demand models
+# Inputs:
+#    data_uri: str
+#    display_name: str [Default: 'ecomm-demand']
+#    max_ratio: float [Default: 0.9]
+#    project: str
+#    region: str [Default: 'europe-west2']
+components:
+  comp-condition-1:
+    dag:
+      tasks:
+        register-op:
+          cachingOptions:
+            enableCache: true
+          componentRef:
+            name: comp-register-op
+          inputs:
+            artifacts:
+              model:
+                componentInputArtifact: pipelinechannel--train-op-model
+            parameters:
+              display_name:
+                componentInputParameter: pipelinechannel--display_name
+              project:
+                componentInputParameter: pipelinechannel--project
+              region:
+                componentInputParameter: pipelinechannel--region
+          taskInfo:
+            name: register-op
+    inputDefinitions:
+      artifacts:
+        pipelinechannel--train-op-model:
+          artifactType:
+            schemaTitle: system.Model
+            schemaVersion: 0.0.1
+      parameters:
+        pipelinechannel--display_name:
+          parameterType: STRING
+        pipelinechannel--gate-op-Output:
+          parameterType: BOOLEAN
+        pipelinechannel--project:
+          parameterType: STRING
+        pipelinechannel--region:
+          parameterType: STRING
+  comp-gate-op:
+    executorLabel: exec-gate-op
+    inputDefinitions:
+      parameters:
+        max_ratio:
+          parameterType: NUMBER_DOUBLE
+        wape_model:
+          parameterType: NUMBER_DOUBLE
+        wape_naive:
+          parameterType: NUMBER_DOUBLE
+    outputDefinitions:
+      parameters:
+        Output:
+          parameterType: BOOLEAN
+  comp-register-op:
+    executorLabel: exec-register-op
+    inputDefinitions:
+      artifacts:
+        model:
+          artifactType:
+            schemaTitle: system.Model
+            schemaVersion: 0.0.1
+      parameters:
+        display_name:
+          parameterType: STRING
+        project:
+          parameterType: STRING
+        region:
+          parameterType: STRING
+  comp-train-op:
+    executorLabel: exec-train-op
+    inputDefinitions:
+      parameters:
+        data_uri:
+          parameterType: STRING
+    outputDefinitions:
+      artifacts:
+        metrics:
+          artifactType:
+            schemaTitle: system.Metrics
+            schemaVersion: 0.0.1
+        model:
+          artifactType:
+            schemaTitle: system.Model
+            schemaVersion: 0.0.1
+      parameters:
+        wape_model:
+          parameterType: NUMBER_DOUBLE
+        wape_naive:
+          parameterType: NUMBER_DOUBLE
+  comp-validate-op:
+    executorLabel: exec-validate-op
+    inputDefinitions:
+      parameters:
+        data_uri:
+          parameterType: STRING
+    outputDefinitions:
+      parameters:
+        Output:
+          parameterType: BOOLEAN
+deploymentSpec:
+  executors:
+    exec-gate-op:
+      container:
+        args:
+        - --executor_input
+        - '{{$}}'
+        - --function_to_execute
+        - gate_op
+        command:
+        - sh
+        - -c
+        - "\nif ! [ -x \"$(command -v pip)\" ]; then\n    python3 -m ensurepip ||\
+          \ python3 -m ensurepip --user || apt-get install python3-pip\nfi\n\nPIP_DISABLE_PIP_VERSION_CHECK=1\
+          \ python3 -m pip install --quiet --no-warn-script-location 'kfp==2.18.1'\
+          \ '--no-deps' 'typing-extensions>=3.7.4,<5; python_version<\"3.9\"' && \"\
+          $0\" \"$@\"\n"
+        - sh
+        - -ec
+        - 'program_path=$(mktemp -d)
+
+
+          printf "%s" "$0" > "$program_path/ephemeral_component.py"
+
+          _KFP_RUNTIME=true python3 -m kfp.dsl.executor_main                         --component_module_path                         "$program_path/ephemeral_component.py"                         "$@"
+
+          '
+        - "\nimport kfp\nfrom kfp import dsl\nfrom kfp.dsl import *\nfrom typing import\
+          \ *\n\ndef gate_op(wape_model: float, wape_naive: float, max_ratio: float)\
+          \ -> bool:\n    \"\"\"True only if the model beats the seasonal-naive baseline\
+          \ by the required margin.\"\"\"\n    return wape_model <= wape_naive * max_ratio\n\
+          \n"
+        image: python:3.11-slim
+    exec-register-op:
+      container:
+        args:
+        - --executor_input
+        - '{{$}}'
+        - --function_to_execute
+        - register_op
+        command:
+        - sh
+        - -c
+        - "\nif ! [ -x \"$(command -v pip)\" ]; then\n    python3 -m ensurepip ||\
+          \ python3 -m ensurepip --user || apt-get install python3-pip\nfi\n\nPIP_DISABLE_PIP_VERSION_CHECK=1\
+          \ python3 -m pip install --quiet --no-warn-script-location 'google-cloud-aiplatform'\
+          \  &&  python3 -m pip install --quiet --no-warn-script-location 'kfp==2.18.1'\
+          \ '--no-deps' 'typing-extensions>=3.7.4,<5; python_version<\"3.9\"' && \"\
+          $0\" \"$@\"\n"
+        - sh
+        - -ec
+        - 'program_path=$(mktemp -d)
+
+
+          printf "%s" "$0" > "$program_path/ephemeral_component.py"
+
+          _KFP_RUNTIME=true python3 -m kfp.dsl.executor_main                         --component_module_path                         "$program_path/ephemeral_component.py"                         "$@"
+
+          '
+        - "\nimport kfp\nfrom kfp import dsl\nfrom kfp.dsl import *\nfrom typing import\
+          \ *\n\ndef register_op(model: dsl.Input[dsl.Model], project: str, region:\
+          \ str, display_name: str):\n    from google.cloud import aiplatform\n  \
+          \  aiplatform.init(project=project, location=region)\n    aiplatform.Model.upload(display_name=display_name,\
+          \ artifact_uri=model.uri,\n                            serving_container_image_uri=\"\
+          europe-docker.pkg.dev/vertex-ai/prediction/sklearn-cpu.1-5:latest\")\n\n"
+        image: python:3.11-slim
+    exec-train-op:
+      container:
+        args:
+        - --executor_input
+        - '{{$}}'
+        - --function_to_execute
+        - train_op
+        command:
+        - sh
+        - -c
+        - "\nif ! [ -x \"$(command -v pip)\" ]; then\n    python3 -m ensurepip ||\
+          \ python3 -m ensurepip --user || apt-get install python3-pip\nfi\n\nPIP_DISABLE_PIP_VERSION_CHECK=1\
+          \ python3 -m pip install --quiet --no-warn-script-location 'pandas' 'pyarrow'\
+          \ 'lightgbm' 'numpy'  &&  python3 -m pip install --quiet --no-warn-script-location\
+          \ 'kfp==2.18.1' '--no-deps' 'typing-extensions>=3.7.4,<5; python_version<\"\
+          3.9\"' && \"$0\" \"$@\"\n"
+        - sh
+        - -ec
+        - 'program_path=$(mktemp -d)
+
+
+          printf "%s" "$0" > "$program_path/ephemeral_component.py"
+
+          _KFP_RUNTIME=true python3 -m kfp.dsl.executor_main                         --component_module_path                         "$program_path/ephemeral_component.py"                         "$@"
+
+          '
+        - "\nimport kfp\nfrom kfp import dsl\nfrom kfp.dsl import *\nfrom typing import\
+          \ *\n\ndef train_op(data_uri: str, model: dsl.Output[dsl.Model], metrics:\
+          \ dsl.Output[dsl.Metrics]) -> NamedTuple(\n        \"TrainOut\", [(\"wape_model\"\
+          , float), (\"wape_naive\", float)]):\n    import subprocess, json, sys\n\
+          \    # container image in production bakes src/ in; here we import the project\
+          \ package from the image\n    sys.path.insert(0, \"/srv/src\")\n    from\
+          \ train import train\n    m = train(data_uri, model.path, log_mlflow=False)\n\
+          \    metrics.log_metric(\"wape_model\", m[\"wape_model\"]); metrics.log_metric(\"\
+          wape_naive\", m[\"wape_seasonal_naive\"])\n    model.metadata[\"wape_model\"\
+          ] = m[\"wape_model\"]\n    from collections import namedtuple\n    return\
+          \ namedtuple(\"TrainOut\", [\"wape_model\", \"wape_naive\"])(m[\"wape_model\"\
+          ], m[\"wape_seasonal_naive\"])\n\n"
+        image: python:3.11-slim
+    exec-validate-op:
+      container:
+        args:
+        - --executor_input
+        - '{{$}}'
+        - --function_to_execute
+        - validate_op
+        command:
+        - sh
+        - -c
+        - "\nif ! [ -x \"$(command -v pip)\" ]; then\n    python3 -m ensurepip ||\
+          \ python3 -m ensurepip --user || apt-get install python3-pip\nfi\n\nPIP_DISABLE_PIP_VERSION_CHECK=1\
+          \ python3 -m pip install --quiet --no-warn-script-location 'pandas' 'pyarrow'\
+          \  &&  python3 -m pip install --quiet --no-warn-script-location 'kfp==2.18.1'\
+          \ '--no-deps' 'typing-extensions>=3.7.4,<5; python_version<\"3.9\"' && \"\
+          $0\" \"$@\"\n"
+        - sh
+        - -ec
+        - 'program_path=$(mktemp -d)
+
+
+          printf "%s" "$0" > "$program_path/ephemeral_component.py"
+
+          _KFP_RUNTIME=true python3 -m kfp.dsl.executor_main                         --component_module_path                         "$program_path/ephemeral_component.py"                         "$@"
+
+          '
+        - "\nimport kfp\nfrom kfp import dsl\nfrom kfp.dsl import *\nfrom typing import\
+          \ *\n\ndef validate_op(data_uri: str) -> bool:\n    import pandas as pd\n\
+          \    df = pd.read_parquet(data_uri)\n    ok = (not df.duplicated([\"sku\"\
+          , \"date\"]).any()) and bool((df.units >= 0).all()) and bool((df.price >\
+          \ 0).all())\n    if not ok: raise ValueError(\"data validation failed\"\
+          )\n    return ok\n\n"
+        image: python:3.11-slim
+pipelineInfo:
+  description: Validate, train, gate and register demand models
+  name: ecomm-demand-forecast
+root:
+  dag:
+    tasks:
+      condition-1:
+        componentRef:
+          name: comp-condition-1
+        dependentTasks:
+        - gate-op
+        - train-op
+        inputs:
+          artifacts:
+            pipelinechannel--train-op-model:
+              taskOutputArtifact:
+                outputArtifactKey: model
+                producerTask: train-op
+          parameters:
+            pipelinechannel--display_name:
+              componentInputParameter: display_name
+            pipelinechannel--gate-op-Output:
+              taskOutputParameter:
+                outputParameterKey: Output
+                producerTask: gate-op
+            pipelinechannel--project:
+              componentInputParameter: project
+            pipelinechannel--region:
+              componentInputParameter: region
+        taskInfo:
+          name: beats-baseline
+        triggerPolicy:
+          condition: inputs.parameter_values['pipelinechannel--gate-op-Output'] ==
+            true
+      gate-op:
+        cachingOptions:
+          enableCache: true
+        componentRef:
+          name: comp-gate-op
+        dependentTasks:
+        - train-op
+        inputs:
+          parameters:
+            max_ratio:
+              componentInputParameter: max_ratio
+            wape_model:
+              taskOutputParameter:
+                outputParameterKey: wape_model
+                producerTask: train-op
+            wape_naive:
+              taskOutputParameter:
+                outputParameterKey: wape_naive
+                producerTask: train-op
+        taskInfo:
+          name: gate-op
+      train-op:
+        cachingOptions:
+          enableCache: true
+        componentRef:
+          name: comp-train-op
+        dependentTasks:
+        - validate-op
+        inputs:
+          parameters:
+            data_uri:
+              componentInputParameter: data_uri
+        taskInfo:
+          name: train-op
+      validate-op:
+        cachingOptions:
+          enableCache: true
+        componentRef:
+          name: comp-validate-op
+        inputs:
+          parameters:
+            data_uri:
+              componentInputParameter: data_uri
+        taskInfo:
+          name: validate-op
+  inputDefinitions:
+    parameters:
+      data_uri:
+        parameterType: STRING
+      display_name:
+        defaultValue: ecomm-demand
+        isOptional: true
+        parameterType: STRING
+      max_ratio:
+        defaultValue: 0.9
+        isOptional: true
+        parameterType: NUMBER_DOUBLE
+      project:
+        parameterType: STRING
+      region:
+        defaultValue: europe-west2
+        isOptional: true
+        parameterType: STRING
+schemaVersion: 2.1.0
+sdkVersion: kfp-2.18.1

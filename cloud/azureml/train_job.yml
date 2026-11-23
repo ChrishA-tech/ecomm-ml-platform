@@ -1,0 +1,16 @@
+$schema: https://azuremlschemas.azureedge.net/latest/commandJob.schema.json
+type: command
+display_name: ecomm-demand-train
+experiment_name: ecomm-demand
+code: ../../src
+command: >-
+  python train.py ${{inputs.orders}} ${{outputs.model_dir}}
+inputs:
+  orders:
+    type: uri_file
+    path: azureml:ecomm-orders@latest
+outputs:
+  model_dir:
+    type: uri_folder
+environment: azureml:ecomm-lgbm-env@latest
+compute: azureml:cpu-cluster
