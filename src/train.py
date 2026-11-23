@@ -24,8 +24,8 @@ def train(data_path, out_dir, log_mlflow=True):
     base_naive, base_roll = te["lag_7"].values, te["roll28"].values
     # paired bootstrap over SKUs for WAPE difference (model - seasonal naive)
     rng = np.random.default_rng(7); skus = te["sku"].unique(); diffs = []
-    g = te.assign(p=p50, n=base_naive).groupby("sku")
-    agg = g.apply(lambda d: pd.Series({"ae_m": np.abs(d.units - d.p).sum(), "ae_n": np.abs(d.units - d.n).sum(), "y": d.units.sum()}))
+    tmp = te.assign(ae_m=np.abs(te["units"].values - p50), ae_n=np.abs(te["units"].values - base_naive))
+    agg = tmp.groupby("sku").agg(ae_m=("ae_m", "sum"), ae_n=("ae_n", "sum"), y=("units", "sum"))
     for _ in range(1000):
         s = agg.loc[rng.choice(skus, len(skus))]
         diffs.append((s.ae_m.sum() - s.ae_n.sum()) / s.y.sum())
